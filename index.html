@@ -64,6 +64,12 @@ kbd{background:var(--panel);border:1px solid var(--line);border-radius:5px;paddi
 .sub{color:var(--muted);font-size:13.5px}
 .tag{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:5px;padding:0 6px}
 .tag.none{color:#c0763a;border-color:currentColor}
+.st{flex-basis:100%;display:flex;align-items:center;gap:4px 14px;flex-wrap:wrap;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.st b{color:var(--fg);font-weight:600}
+.st .an{display:inline-flex;align-items:center;gap:6px}
+.st .ab{display:inline-flex;width:64px;height:6px;border-radius:3px;overflow:hidden;background:var(--line)}
+.st .ab i{display:block;height:100%;background:var(--accent)}
+.st .sq{color:#c0763a}
 .ext{display:flex;gap:2px;flex:none}
 .ext a{font-size:13px}
 .jb{display:none;padding:0 12px 12px}
@@ -203,17 +209,32 @@ function mpGrab(APP){
     var r=await fetch('/index/paradigm.mhtml?judge_person_id='+pid,{credentials:'include'});
     var s='';
     if(r.body&&r.body.getReader){var rd=r.body.getReader(),dec=new TextDecoder();
-      for(;;){var c=await rd.read();if(c.done)break;s+=dec.decode(c.value,{stream:true});if(s.indexOf('screens record')>-1){try{rd.cancel()}catch(e){}break}}}
+      for(;;){var c=await rd.read();if(c.done)break;s+=dec.decode(c.value,{stream:true})}s+=dec.decode()}
     else s=await r.text();
     var d=new DOMParser().parseFromString(s,'text/html');
     if(/must be logged in/i.test(d.body?d.body.textContent:'')){needLogin=true;throw new Error('login')}
     var p=d.querySelector('div.paradigm:not(.screens)'),rv=d.querySelector('.screens.paradigm .rightalign');
-    return {html:p?p.innerHTML.trim():'',reviewed:rv?rv.textContent.replace(/\s+/g,' ').trim():''};
+    return {html:p?p.innerHTML.trim():'',reviewed:rv?rv.textContent.replace(/\s+/g,' ').trim():'',rec:recStats(d)};
+  }
+  // judge record tab: one row per round judged; Vote = side this judge voted for, Result = panel decision (e.g. "Aff 2-1", panels only)
+  function recStats(d){
+    var t=d.getElementById('judgerecord');if(!t)return null;
+    var hs=[].map.call(t.querySelectorAll('thead th'),function(th){return th.textContent.trim().toLowerCase()});
+    var vi=hs.indexOf('vote'),ri=hs.indexOf('result');if(vi<0)return null;
+    var AFF=/^(aff|affirmative|pro|gov|government|prop|proposition)$/i,NEG=/^(neg|negative|con|opp|opposition)$/i;
+    var o={rounds:0,aff:0,neg:0,panels:0,maj:0};
+    [].forEach.call(t.querySelectorAll('tbody tr'),function(tr){
+      if(!tr.cells.length)return;o.rounds++;
+      var v=(tr.cells[vi]?tr.cells[vi].textContent:'').replace(/\s+/g,' ').trim(),r=ri>-1&&tr.cells[ri]?tr.cells[ri].textContent.replace(/\s+/g,' ').trim():'';
+      if(AFF.test(v))o.aff++;else if(NEG.test(v))o.neg++;
+      if(r){o.panels++;var lv=v.toLowerCase(),lr=r.toLowerCase();if(lv&&(lr===lv||lr.indexOf(lv+' ')===0))o.maj++}
+    });
+    return o;
   }
   async function worker(){
     while(todo.length&&!needLogin){var j=todo.shift();
-      for(var t=0;t<3;t++){try{var r=await getPar(j.pid);j.paradigm=r.html;j.reviewed=r.reviewed;break}catch(e){if(needLogin)break;if(t===2){failed++;j.paradigm=null;j.err=1}else await new Promise(function(z){setTimeout(z,600*(t+1))})}}
-      done++;say('reading paradigms… '+done+' / '+judges.filter(function(j){return j.pid}).length);
+      for(var t=0;t<3;t++){try{var r=await getPar(j.pid);j.paradigm=r.html;j.reviewed=r.reviewed;j.rec=r.rec;break}catch(e){if(needLogin)break;if(t===2){failed++;j.paradigm=null;j.err=1}else await new Promise(function(z){setTimeout(z,600*(t+1))})}}
+      done++;say('reading paradigms + records… '+done+' / '+judges.filter(function(j){return j.pid}).length);
     }
   }
   var ready=false,sent=false;
@@ -280,7 +301,7 @@ function ingest(d,how,prefs){
   d.judges.forEach(function(j,i){if(typeof j.n!=='number')j.n=i;if(j.paradigm!=null)j.paradigm=String(j.paradigm)});
   var k=poolKey(d),old=LS.get('mp:d:'+k,null);
   // keep previously fetched paradigms for judges whose fetch failed this time
-  if(old&&old.judges){var byId={};old.judges.forEach(function(j){byId[idOf(j)]=j});d.judges.forEach(function(j){var o=byId[idOf(j)];if(j.err&&o&&o.paradigm!=null){j.paradigm=o.paradigm;j.reviewed=o.reviewed;delete j.err}})}
+  if(old&&old.judges){var byId={};old.judges.forEach(function(j){byId[idOf(j)]=j});d.judges.forEach(function(j){var o=byId[idOf(j)];if(j.err&&o&&o.paradigm!=null){j.paradigm=o.paradigm;j.reviewed=o.reviewed;j.rec=o.rec;delete j.err}})}
   delete d.done;
   if(!LS.set('mp:d:'+k,d))return;
   if(prefs&&typeof prefs==='object'){var cur=LS.get('mp:p:'+k,{});Object.keys(prefs).forEach(function(x){if(prefs[x])cur[x]=1});LS.set('mp:p:'+k,cur)}
@@ -339,7 +360,7 @@ $('#addBtn').addEventListener('click',function(){var s=$('#setup');if(s.hidden)f
 /* --- settings bar --- */
 function buildSorts(){
   var g=$('#sorts');$$('#sorts .chip').forEach(function(c){c.remove()});
-  var opts=[['#','tabroom']].concat((D.cols||[]).filter(function(c){return !isMid(c)}).map(function(c){return [c,c.toLowerCase()]})).concat([['~words','length']]);
+  var opts=[['#','tabroom']].concat((D.cols||[]).filter(function(c){return !isMid(c)}).map(function(c){return [c,c.toLowerCase()]})).concat([['~words','length'],['~judged','rounds judged'],['~maj','majority %'],['~aff','aff %']]);
   if(!opts.some(function(o){return o[0]===S.sort}))S.sort='#';
   opts.forEach(function(o){var b=document.createElement('button');b.className='chip';b.dataset.sort=o[0];b.textContent=o[1];g.appendChild(b)});
   paintSorts();
@@ -347,7 +368,7 @@ function buildSorts(){
 function paintSorts(){$$('#sorts .chip').forEach(function(b){var on=b.dataset.sort===S.sort;b.classList.toggle('on',on);
   var base=b.textContent.replace(/ [▲▼]$/,'');b.textContent=on&&S.sort!=='#'?base+(S.dir>0?' ▲':' ▼'):base;b.setAttribute('aria-pressed',on)})}
 $('#sorts').addEventListener('click',function(e){var b=e.target.closest('[data-sort]');if(!b)return;
-  if(S.sort===b.dataset.sort)S.dir=-S.dir;else{S.sort=b.dataset.sort;S.dir=(S.sort==='~words'||isNum(S.sort))?-1:1}
+  if(S.sort===b.dataset.sort)S.dir=-S.dir;else{S.sort=b.dataset.sort;S.dir=(S.sort.charAt(0)==='~'||isNum(S.sort))?-1:1}
   saveS();paintSorts();order()});
 function isNum(c){return D&&D.judges.length&&D.judges.every(function(j){var v=j.cells[c];return v===''||v==null||!isNaN(+v)})}
 function paintChips(sel,attr,val){$$(sel).forEach(function(b){var on=String(b.dataset[attr])===String(val);b.classList.toggle('on',on);b.setAttribute('aria-pressed',on)})}
@@ -373,17 +394,24 @@ function build(){
       return /^rounds?$/i.test(c)?j.cells[c]+' rds':j.cells[c]});
     var html=j.paradigm?clean(j.paradigm):'';
     var tmp=document.createElement('div');tmp.innerHTML=html;var text=tmp.textContent.replace(/\s+/g,' ').trim();
-    var words=text?text.split(' ').length:0;
+    var words=text?text.split(' ').length:0,R=j.rec,st='';
+    if(R&&!R.rounds)R=null;
+    if(R){var an=R.aff+R.neg,ap=an?Math.round(R.aff/an*100):null,mp=R.panels?Math.round(R.maj/R.panels*100):null;
+      st='<span class="st"><span><b>'+R.rounds+'</b> rounds judged</span>'+
+        (R.panels?'<span title="Panels where this judge voted with the majority / panels sat on">panels <b>'+R.maj+'</b>/'+R.panels+' with majority ('+mp+'%)'+(R.panels-R.maj?' · <span class="sq">'+(R.panels-R.maj)+' squirrel'+(R.panels-R.maj===1?'':'s')+'</span>':'')+'</span>':'<span>no panels</span>')+
+        (an?'<span class="an" title="Share of decisions for each side">aff <b>'+ap+'%</b><span class="ab" aria-hidden="true"><i style="width:'+ap+'%"></i></span><b>'+(100-ap)+'%</b> neg</span>':'')+'</span>'}
+    else if(j.pid&&!j.err&&j.rec===undefined)st='<span class="st">record not pulled — re-run the bookmark</span>';
+    else if(j.pid&&!j.err)st='<span class="st">no judging record</span>';
     art.innerHTML='<div class="jh" role="button" tabindex="0" aria-expanded="false">'+
       '<button class="ck" role="checkbox" aria-checked="false" aria-label="Mark '+esc(name)+' as preffed" title="preffed">'+CHECK+'</button>'+
       '<span class="tw" aria-hidden="true">▶</span>'+
       '<span class="who"><span class="nm">'+esc(name)+'</span><span class="sub">'+esc(sub.join(' · '))+'</span>'+
-      (j.pid?(j.err?'<span class="tag none">fetch failed</span>':(!text?'<span class="tag none">no paradigm</span>':'<span class="tag">'+words+' words</span>')):'<span class="tag none">no tabroom account</span>')+'</span>'+
+      (j.pid?(j.err?'<span class="tag none">fetch failed</span>':(!text?'<span class="tag none">no paradigm</span>':'<span class="tag">'+words+' words</span>')):'<span class="tag none">no tabroom account</span>')+st+'</span>'+
       '<span class="ext">'+(j.pid?'<a class="chip" target="_blank" rel="noopener noreferrer" href="https://www.tabroom.com/index/paradigm.mhtml?judge_person_id='+encodeURIComponent(j.pid)+'">tabroom ↗</a>':'')+
       (j.record&&/^https:\/\/(www\.)?tabroom\.com\//.test(j.record)?'<a class="chip" target="_blank" rel="noopener noreferrer" href="'+esc(j.record)+'">record ↗</a>':'')+'</span></div>'+
       '<div class="jb">'+(j.reviewed?'<p class="rev">'+esc(j.reviewed)+'</p>':'')+
       '<div class="card" data-paper="'+S.paper+'">'+(html||'<p class="empty">'+(j.pid?(j.err?'Couldn’t load this paradigm — run the bookmark again.':'This judge hasn’t written a paradigm.'):'This judge isn’t linked to a Tabroom account, so there’s no paradigm.')+'</p>')+'</div></div>';
-    rows[id]={el:art,j:j,name:name,hay:(name+' '+sub.join(' ')+' '+text).toLowerCase(),words:words,html:html};
+    rows[id]={el:art,j:j,name:name,rec:R?{judged:R.rounds,maj:R.panels?R.maj/R.panels:null,aff:(R.aff+R.neg)?R.aff/(R.aff+R.neg):null}:null,hay:(name+' '+sub.join(' ')+' '+text).toLowerCase(),words:words,html:html};
     paintRow(id);list.appendChild(art);
   });
   order();count();
@@ -393,10 +421,13 @@ function paintRow(id){var r=rows[id];if(!r)return;var done=!!P[id],open=isOpen(i
   r.el.classList.toggle('done',done);r.el.classList.toggle('open',open);
   r.el.querySelector('.ck').setAttribute('aria-checked',done);r.el.querySelector('.jh').setAttribute('aria-expanded',open)}
 function order(){
-  var ids=Object.keys(rows),c=S.sort,d=S.dir,num=c!=='#'&&c!=='~words'&&isNum(c);
+  var ids=Object.keys(rows),c=S.sort,d=S.dir,num=c!=='#'&&c.charAt(0)!=='~'&&isNum(c);
   ids.sort(function(a,b){var A=rows[a],B=rows[b],r=0;
     if(c==='#')r=A.j.n-B.j.n;
     else if(c==='~words')r=(A.words-B.words)*d;
+    else if(c.charAt(0)==='~'){var k=c.slice(1),x=A.rec?A.rec[k]:null,y=B.rec?B.rec[k]:null;
+      if((x==null)!==(y==null))return x==null?1:-1;   // no record → last
+      r=((x||0)-(y||0))*d}
     else{var x=A.j.cells[c]||'',y=B.j.cells[c]||'';
       if(!x!==!y)return x?-1:1;                        // blanks last either direction
       r=(num?(+x)-(+y):x.localeCompare(y,undefined,{numeric:true,sensitivity:'base'}))*d}
@@ -491,8 +522,8 @@ function download(name,text,type){var a=document.createElement('a');a.href=URL.c
 function slug(){return (titleCase(D.tourn)+' '+D.category).replace(/[^\w]+/g,'-').replace(/^-|-$/g,'').toLowerCase()}
 $('#csv').addEventListener('click',function(){
   var cols=D.cols||[],q=function(v){v=String(v==null?'':v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
-  var lines=[cols.concat(['Preffed','Paradigm words','Tabroom']).map(q).join(',')];
-  D.judges.forEach(function(j){var id=idOf(j);lines.push(cols.map(function(c){return q(j.cells[c])}).concat([P[id]?'yes':'',rows[id]?rows[id].words:'',j.pid?'https://www.tabroom.com/index/paradigm.mhtml?judge_person_id='+j.pid:'']).map(q).join(','))});
+  var lines=[cols.concat(['Preffed','Paradigm words','Rounds judged','Panels','With majority','Aff votes','Neg votes','Tabroom']).map(q).join(',')];
+  D.judges.forEach(function(j){var id=idOf(j);lines.push(cols.map(function(c){return q(j.cells[c])}).concat([P[id]?'yes':'',rows[id]?rows[id].words:''].concat(j.rec?[j.rec.rounds,j.rec.panels,j.rec.maj,j.rec.aff,j.rec.neg]:['','','','','']).concat([j.pid?'https://www.tabroom.com/index/paradigm.mhtml?judge_person_id='+j.pid:''])).map(q).join(','))});
   download(slug()+'.csv',lines.join('\n'),'text/csv')});
 $('#json').addEventListener('click',function(){download(slug()+'.monkeypref.json',JSON.stringify({pool:D,prefs:P}),'application/json')});
 function pickFile(){$('#file').value='';$('#file').click()}
