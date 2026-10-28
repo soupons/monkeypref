@@ -319,6 +319,7 @@ $('#delAll').addEventListener('click',function(){if(!pools.length||!confirm('Del
   pools.forEach(function(p){['d','p','c'].forEach(function(x){LS.del('mp:'+x+':'+p.key)})});pools=[];LS.set('mp:pools',pools);load(null);toast('All pools deleted')});
 // Tabroom sort placeholders like "1111111" / "zzzzzz" mean "no school" → Hired
 function fixCell(c,v){v=v==null?'':String(v);var sch=/^(institution|school)$/i.test(c);if(/^(.)\1{3,}$/.test(v.trim()))v='';return sch&&!v.trim()?'Hired':v}
+function isMid(c){return /^mid(dle)?(\s*name)?$|^m\.?i\.?$/i.test(String(c).trim())}
 function titleCase(s){s=String(s||'');return s===s.toUpperCase()?s.toLowerCase().replace(/\b([a-z])/g,function(m){return m.toUpperCase()}):s}
 function load(k){
   key=k;D=k?LS.get('mp:d:'+k,null):null;
@@ -338,7 +339,7 @@ $('#addBtn').addEventListener('click',function(){var s=$('#setup');if(s.hidden)f
 /* --- settings bar --- */
 function buildSorts(){
   var g=$('#sorts');$$('#sorts .chip').forEach(function(c){c.remove()});
-  var opts=[['#','tabroom']].concat((D.cols||[]).map(function(c){return [c,c.toLowerCase()]})).concat([['~words','length']]);
+  var opts=[['#','tabroom']].concat((D.cols||[]).filter(function(c){return !isMid(c)}).map(function(c){return [c,c.toLowerCase()]})).concat([['~words','length']]);
   if(!opts.some(function(o){return o[0]===S.sort}))S.sort='#';
   opts.forEach(function(o){var b=document.createElement('button');b.className='chip';b.dataset.sort=o[0];b.textContent=o[1];g.appendChild(b)});
   paintSorts();
@@ -368,7 +369,7 @@ function build(){
   D.judges.forEach(function(j){
     var id=idOf(j),art=document.createElement('article');art.className='j';art.dataset.id=id;
     var name=[j.cells.First,j.cells.Last].filter(Boolean).join(' ')||j.cells.Name||'(unnamed)';
-    var sub=(D.cols||[]).filter(function(c){return c!=='First'&&c!=='Last'&&j.cells[c]}).map(function(c){
+    var sub=(D.cols||[]).filter(function(c){return c!=='First'&&c!=='Last'&&!isMid(c)&&j.cells[c]}).map(function(c){
       return /^rounds?$/i.test(c)?j.cells[c]+' rds':j.cells[c]});
     var html=j.paradigm?clean(j.paradigm):'';
     var tmp=document.createElement('div');tmp.innerHTML=html;var text=tmp.textContent.replace(/\s+/g,' ').trim();
